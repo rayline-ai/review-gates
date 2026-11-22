@@ -1,0 +1,97 @@
+name: codex-gate
+# Required by an org ruleset ("workflows" rule) on repositories in change-review scope.
+# Passes when the PR head is cleared by either:
+#   - the Codex review: its summary comment (codex-review-state:v1) names the head commit as
+#     completed with no unresolved findings, and the PR has no unresolved review threads; or
+#   - a human approval: an APPROVED review on the head commit by a user account that is not the author.
+# Codex does not review bot-authored PRs, so those pass only through a human approval.
+# The job waits up to 20 minutes for either condition. If it times out, re-run it once the
+# review or approval is in. Merge-queue runs pass: PR heads are checked before they enter the queue.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  codex-reviewed-head:
+    name: codex-reviewed-head
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Merge queue
+        if: github.event_name == 'merge_group'
+        run: echo "merge_group run; PR heads were gated before entering the queue."
+      - name: Wait for Codex clearance or a human approval of the head
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          WAIT_SECONDS: "1200"
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys, time
+
+          repo, pr, head, author = os.environ["REPO"], os.environ["PR"], os.environ["HEAD"], os.environ["AUTHOR"]
+          owner, name = repo.split("/")
+          deadline = time.time() + int(os.environ["WAIT_SECONDS"])
+
+          def api(*args):
+              out = subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
+              return json.loads(out) if out.strip() else None
+
+          def pages(path):
+              out = subprocess.run(["gh", "api", "--paginate", "--slurp", path], check=True, capture_output=True, text=True).stdout
+              return [x for page in json.loads(out) for x in page]
+
+          def codex_clear():
+              state = None
+              for c in pages(f"repos/{repo}/issues/{pr}/comments?per_page=100"):
+                  if c["user"]["login"] != "chatgpt-codex-connector[bot]":
+                      continue
+                  m = re.search(r"<!-- codex-review-state:v1 (\{.*?\}) -->", c["body"] or "")
+                  if m:
+                      state = json.loads(m.group(1))
+              if not state:
+                  return False, "no Codex summary yet"
+              cr = state.get("code_review") or {}
+              if cr.get("commit_sha") != head:
+                  return False, f"Codex reviewed {str(cr.get('commit_sha'))[:8]}, head is {head[:8]}"
+              if cr.get("status") != "completed":
+                  return False, f"Codex review {cr.get('status')}"
+              if cr.get("has_unresolved_findings") is not False:
+                  return False, "Codex has unresolved findings"
+              q = ("query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p)"
+                   "{reviewThreads(first:100){nodes{isResolved}}}}}")
+              d = api("graphql", "-F", f"o={owner}", "-F", f"n={name}", "-F", f"p={pr}", "-f", f"query={q}")
+              open_threads = [t for t in d["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"] if not t["isResolved"]]
+              if open_threads:
+                  return False, f"{len(open_threads)} unresolved review thread(s)"
+              return True, f"Codex cleared {head[:8]}"
+
+          def human_approval():
+              for r in pages(f"repos/{repo}/pulls/{pr}/reviews?per_page=100"):
+                  u = r.get("user") or {}
+                  if r.get("state") == "APPROVED" and r.get("commit_id") == head and u.get("type") == "User" and u.get("login") != author:
+                      return True, f"approved on {head[:8]} by {u['login']}"
+              return False, "no human approval on head"
+
+          while True:
+              ok1, why1 = codex_clear()
+              ok2, why2 = human_approval()
+              if ok1 or ok2:
+                  print("PASS:", why1 if ok1 else why2)
+                  sys.exit(0)
+              if time.time() > deadline:
+                  print(f"FAIL after wait: {why1}; {why2}. Re-run this job once Codex has cleared the head or a human has approved it.")
+                  sys.exit(1)
+              print(f"waiting: {why1}; {why2}")
+              time.sleep(30)
+          PY
