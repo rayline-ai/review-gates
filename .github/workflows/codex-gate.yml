@@ -42,7 +42,7 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
-          HOW_URL: https://claude.ai/artifact/Y54TmW1vGTxaj544zvJsr9
+          HOW_URL: https://docs.rlhq.dev/a/Y54TmW1vGTxaj544zvJsr9/
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess, sys, time
