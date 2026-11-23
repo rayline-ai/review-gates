@@ -39,6 +39,10 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           WAIT_SECONDS: "1200"
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          HOW_URL: https://docs.rlhq.dev/a/Y54TmW1vGTxaj544zvJsr9/
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess, sys, time
@@ -93,8 +97,13 @@ jobs:
                           and r.get("commit_id") == head:
                       print(f"already approved {head[:8]} (codex-gate)")
                       return
+              run_url = f"{os.environ['SERVER_URL']}/{repo}/actions/runs/{os.environ['RUN_ID']}"
+              if int(os.environ.get("RUN_ATTEMPT") or "1") > 1:
+                  run_url += f"/attempts/{os.environ['RUN_ATTEMPT']}"
+              body = (f"**SOC 2 review gate: approved.** Codex cleared {head[:8]}, no unresolved findings. "
+                      f"[Gate run]({run_url}) · [How this works]({os.environ['HOW_URL']})")
               api("-X", "POST", f"repos/{repo}/pulls/{pr}/reviews", "-f", "event=APPROVE", "-f", f"commit_id={head}",
-                  "-f", f"body=Automated approval: Codex cleared {head[:8]}, no unresolved findings (codex-gate).")
+                  "-f", f"body={body}")
               print(f"approved {head[:8]} (codex-gate)")
 
           while True:
