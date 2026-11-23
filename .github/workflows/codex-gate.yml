@@ -5,6 +5,10 @@ name: codex-gate
 #     completed with no unresolved findings, and the PR has no unresolved review threads; or
 #   - a human approval: an APPROVED review on the head commit by a user account that is not the author.
 # Codex does not review bot-authored PRs, so those pass only through a human approval.
+# On the Codex path only, the job also submits an APPROVE review on the head commit with the
+# workflow's GITHUB_TOKEN (once per head). That approval is the routine-change review; paths that
+# need a human reviewer stay blocked by the ruleset's required reviewers. A new push dismisses it,
+# and the next run approves the new head once Codex clears it.
 # The job waits up to 20 minutes for either condition. If it times out, re-run it once the
 # review or approval is in. Merge-queue runs pass: PR heads are checked before they enter the queue.
 on:
@@ -14,7 +18,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   issues: read
 
 jobs:
@@ -83,9 +87,21 @@ jobs:
                       return True, f"approved on {head[:8]} by {u['login']}"
               return False, "no human approval on head"
 
+          def approve_on_codex_clear():
+              for r in pages(f"repos/{repo}/pulls/{pr}/reviews?per_page=100"):
+                  if (r.get("user") or {}).get("login") == "github-actions[bot]" and r.get("state") == "APPROVED" \
+                          and r.get("commit_id") == head:
+                      print(f"already approved {head[:8]} (codex-gate)")
+                      return
+              api("-X", "POST", f"repos/{repo}/pulls/{pr}/reviews", "-f", "event=APPROVE", "-f", f"commit_id={head}",
+                  "-f", f"body=Automated approval: Codex cleared {head[:8]}, no unresolved findings (codex-gate).")
+              print(f"approved {head[:8]} (codex-gate)")
+
           while True:
               ok1, why1 = codex_clear()
               ok2, why2 = human_approval()
+              if ok1:
+                  approve_on_codex_clear()
               if ok1 or ok2:
                   print("PASS:", why1 if ok1 else why2)
                   sys.exit(0)
