@@ -43,6 +43,8 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           HOW_URL: https://docs.rlhq.dev/a/Y54TmW1vGTxaj544zvJsr9/
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess, sys, time
@@ -110,7 +112,17 @@ jobs:
               ok1, why1 = codex_clear()
               ok2, why2 = human_approval()
               if ok1:
-                  approve_on_codex_clear()
+                  if os.environ.get("HEAD_REPO") != os.environ["BASE_REPO"]:
+                      # Fork PR: never approve. Pass as on any run that posts no approval; the merge still
+                      # needs a human soc2-reviewers approval to meet the ruleset.
+                      msg = (f"fork PR ({os.environ.get('HEAD_REPO')} -> {os.environ['BASE_REPO']}): "
+                             "needs a human soc2-reviewers approval; the gate does not approve fork PRs")
+                      print(msg)
+                      if os.environ.get("GITHUB_STEP_SUMMARY"):
+                          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+                              f.write(f"**{msg}**\n")
+                  else:
+                      approve_on_codex_clear()
               if ok1 or ok2:
                   print("PASS:", why1 if ok1 else why2)
                   sys.exit(0)
