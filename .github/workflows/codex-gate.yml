@@ -113,10 +113,10 @@ jobs:
               ok2, why2 = human_approval()
               if ok1:
                   if os.environ.get("HEAD_REPO") != os.environ["BASE_REPO"]:
-                      # Fork PR: never approve. Pass as on any run that posts no approval; the merge still
-                      # needs a human soc2-reviewers approval to meet the ruleset.
+                      # Fork PR: never approve. Pass as on any run that posts no approval; the merge then needs
+                      # a human approval (soc2-reviewers only where the ruleset requires it for high-risk paths).
                       msg = (f"fork PR ({os.environ.get('HEAD_REPO')} -> {os.environ['BASE_REPO']}): "
-                             "needs a human soc2-reviewers approval; the gate does not approve fork PRs")
+                             "not auto-approved; needs a human approval")
                       print(msg)
                       if os.environ.get("GITHUB_STEP_SUMMARY"):
                           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
